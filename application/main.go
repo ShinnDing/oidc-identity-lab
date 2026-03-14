@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"os"
@@ -18,11 +19,20 @@ var (
 	idTokenVerifier *oidc.IDTokenVerifier
 )
 
+type UserClaims struct {
+	Email             string
+	PreferredUsername string
+	Name              string
+}
+
+var currentUser UserClaims
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Println("No .env file found")
 	}
+
 	ctx := context.Background()
 
 	var providerErr error
@@ -35,13 +45,14 @@ func main() {
 		ClientID: "oidc-lab-app",
 	})
 
-	if os.Getenv("OIDC_CLIENT_SECRET") == "" {
+	clientSecret := os.Getenv("OIDC_CLIENT_SECRET")
+	if clientSecret == "" {
 		log.Fatal("OIDC_CLIENT_SECRET is not set")
 	}
 
 	oauth2Config = oauth2.Config{
 		ClientID:     "oidc-lab-app",
-		ClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
+		ClientSecret: clientSecret,
 		Endpoint:     oidcProvider.Endpoint(),
 		RedirectURL:  "http://localhost:3000/callback",
 		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
@@ -50,13 +61,18 @@ func main() {
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/login", loginHandler)
 	http.HandleFunc("/callback", callbackHandler)
+	http.HandleFunc("/profile", profileHandler)
 
 	fmt.Println("App running at http://localhost:3000")
 	log.Fatal(http.ListenAndServe(":3000", nil))
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, "OIDC app is running.")
+	fmt.Fprintln(w, `<html><body>
+		<h2>OIDC app is running.</h2>
+		<p><a href="/login">Login with Keycloak</a></p>
+		<p><a href="/profile">View profile</a></p>
+	</body></html>`)
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
@@ -86,11 +102,9 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 
 	idToken, err := idTokenVerifier.Verify(r.Context(), rawIDToken)
 	if err != nil {
-		http.Error(w, "failed to verify ID token", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("failed to verify ID token: %v", err), http.StatusInternalServerError)
 		return
 	}
-
-	_ = idToken
 
 	var claims struct {
 		Email             string `json:"email"`
@@ -103,8 +117,30 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Fprintf(w, "Login successful.\n")
-	fmt.Fprintf(w, "Name: %s\n", claims.Name)
-	fmt.Fprintf(w, "Username: %s\n", claims.PreferredUsername)
-	fmt.Fprintf(w, "Email: %s\n", claims.Email)
+	currentUser = UserClaims{
+		Email:             claims.Email,
+		PreferredUsername: claims.PreferredUsername,
+		Name:              claims.Name,
+	}
+
+	http.Redirect(w, r, "/profile", http.StatusFound)
+}
+
+func profileHandler(w http.ResponseWriter, r *http.Request) {
+	if currentUser.Email == "" && currentUser.PreferredUsername == "" && currentUser.Name == "" {
+		http.Error(w, "no user is logged in yet", http.StatusUnauthorized)
+		return
+	}
+
+	fmt.Fprintf(w, `<html><body>
+		<h2>Profile</h2>
+		<p><strong>Name:</strong> %s</p>
+		<p><strong>Username:</strong> %s</p>
+		<p><strong>Email:</strong> %s</p>
+		<p><a href="/">Back to home</a></p>
+	</body></html>`,
+		html.EscapeString(currentUser.Name),
+		html.EscapeString(currentUser.PreferredUsername),
+		html.EscapeString(currentUser.Email),
+	)
 }
