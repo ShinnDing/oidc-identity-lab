@@ -92,6 +92,7 @@ This lab demonstrates several important IAM and application security concepts:
 
 ## Project Structure
 
+```
 oidc-identity-lab/
 ├── application/
 │   ├── main.go
@@ -100,7 +101,7 @@ oidc-identity-lab/
 │   └── .env
 ├── LICENSE
 └── README.md
-
+```
 ---
 
 ## Example Pages
