@@ -11,6 +11,7 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -35,7 +36,6 @@ type UserClaims struct {
 type SessionUser struct {
 	IDTokenClaims  UserClaims `json:"id_token_claims"`
 	UserInfoClaims UserClaims `json:"user_info_claims"`
-	AccessToken    string     `json:"-"`
 }
 
 func main() {
@@ -225,8 +225,21 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 	session.Values["user"] = SessionUser{
 		IDTokenClaims:  idClaims,
 		UserInfoClaims: userInfoClaims,
-		AccessToken:    token.AccessToken,
 	}
+
+	err = session.Save(r, w)
+	if err != nil {
+		http.Error(w, "failed to save session", http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "id_token_hint",
+		Value:    rawIDToken,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 
 	err = session.Save(r, w)
 	if err != nil {
@@ -313,6 +326,11 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var rawIDToken string
+	if cookie, err := r.Cookie("id_token_hint"); err == nil {
+		rawIDToken = cookie.Value
+	}
+
 	session.Values = map[interface{}]interface{}{}
 	session.Options.MaxAge = -1
 
@@ -330,10 +348,29 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 	})
 
-	fmt.Fprintln(w, `<html><body>
-		<h2>Logged out</h2>
-		<p><a href="/">Return home</a></p>
-	</body></html>`)
+	http.SetCookie(w, &http.Cookie{
+		Name:     "id_token_hint",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+	})
+
+	logoutRedirect := os.Getenv("KEYCLOAK_LOGOUT_REDIRECT")
+	if logoutRedirect == "" {
+		logoutRedirect = "http://localhost:3000/"
+	}
+
+	if rawIDToken == "" {
+		http.Error(w, "missing id token for logout; log in again and retry", http.StatusBadRequest)
+		return
+	}
+
+	logoutURL := "http://localhost:8080/realms/oidc-lab/protocol/openid-connect/logout" +
+		"?id_token_hint=" + url.QueryEscape(rawIDToken) +
+		"&post_logout_redirect_uri=" + url.QueryEscape(logoutRedirect)
+
+	http.Redirect(w, r, logoutURL, http.StatusFound)
 }
 
 func getSessionUser(w http.ResponseWriter, r *http.Request) (SessionUser, bool) {
@@ -344,6 +381,7 @@ func getSessionUser(w http.ResponseWriter, r *http.Request) (SessionUser, bool) 
 	}
 
 	userValue, ok := session.Values["user"]
+
 	if !ok {
 		http.Error(w, "no user is logged in", http.StatusUnauthorized)
 		return SessionUser{}, false
