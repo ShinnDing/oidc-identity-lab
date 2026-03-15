@@ -1,41 +1,53 @@
 # OIDC Identity Lab — End-to-End Tutorial
 
-This tutorial demonstrates how OpenID Connect (OIDC) provides secure authentication and identity verification for applications.
+This tutorial walks through the OpenID Connect (OIDC) lab implemented in this repository using **Keycloak** as the identity provider and a **Go web application** as the client.
 
-This lab simulates a real-world enterprise identity flow where a client authenticates through an Identity Provider (IdP) and receives cryptographically signed identity tokens.
+The goal of this lab is to demonstrate how a real application can delegate authentication to an identity provider, complete the Authorization Code Flow with PKCE, verify identity information, create an authenticated session, and perform logout through the provider.
 
 ---
 
 # Overview
 
-OpenID Connect (OIDC) is an identity layer built on OAuth 2.0.
+OpenID Connect (OIDC) is an identity layer built on top of OAuth 2.0.
 
-OIDC provides:
+In this lab, OIDC is used to:
 
-• User authentication  
-• Identity verification  
-• Cryptographically signed identity tokens  
+- authenticate a user with Keycloak
+- return an authorization code to the application
+- exchange that code for tokens
+- verify the returned ID token
+- retrieve user identity information from the UserInfo endpoint
+- create a local authenticated session
+- log the user out through Keycloak
 
-Applications use OIDC to authenticate users without managing passwords.
+This mirrors a common enterprise identity pattern used in modern IAM systems.
 
 ---
 
 # Architecture
 
-```
+```text
 User
   │
-  │ logs in
+  │  Visits application
   ▼
-Identity Provider (OIDC)
+Go Web Application
   │
-  │ issues ID Token (JWT)
+  │  Redirects user to Keycloak
   ▼
-Application
+Keycloak
   │
-  │ validates token signature
+  │  Authenticates user
+  │  Returns authorization code
   ▼
-User Authenticated
+Go Web Application
+  │
+  │  Exchanges code for tokens
+  │  Verifies ID token
+  │  Retrieves UserInfo claims
+  │  Creates session
+  ▼
+Protected Pages
 ```
 
 ---
@@ -44,132 +56,279 @@ User Authenticated
 
 Required software:
 
-• Web browser  
-• curl  
-• Python 3 (optional for local testing)
+- Go
+- Docker
+- Web browser
+
+Optional:
+
+- curl
+- Git
 
 ---
 
 # Project Directory
 
-```
+```text
 oidc-identity-lab/
+├── application/
+│   ├── main.go
+│   ├── go.mod
+│   ├── go.sum
+│   └── .env
 ├── docs/
 │   └── tutorial.md
-├── tokens/
-├── examples/
+├── LICENSE
 └── README.md
 ```
 
 ---
 
-# Step 1 — Understand OIDC Components
+# Step 1 — Start Keycloak
 
-OIDC uses the following components:
+Run Keycloak locally with Docker:
 
-Identity Provider (IdP)  
-Issues identity tokens  
-
-Client Application  
-Requests authentication  
-
-ID Token  
-Signed JSON Web Token (JWT) containing identity  
-
----
-
-# Step 2 — Example ID Token Structure
-
-Example decoded JWT:
-
+```bash
+docker run -p 8080:8080 \
+  -e KEYCLOAK_ADMIN=admin \
+  -e KEYCLOAK_ADMIN_PASSWORD=admin \
+  quay.io/keycloak/keycloak:latest start-dev
 ```
-Header:
-{
-  "alg": "RS256",
-  "typ": "JWT"
-}
 
-Payload:
-{
-  "sub": "1234567890",
-  "name": "Demo User",
-  "iss": "https://example-idp.com",
-  "aud": "example-client",
-  "exp": 9999999999
-}
+Then open:
+
+```text
+http://localhost:8080/admin/
+```
+
+Log in with:
+
+```text
+admin / admin
 ```
 
 ---
 
-# Step 3 — Validate Token Signature
+# Step 2 — Create the Realm
 
-Identity Providers sign tokens using private keys.
+In the Keycloak admin console:
 
-Applications validate tokens using public keys.
+1. Click the realm dropdown in the upper-left
+2. Click **Create realm**
+3. Enter: `oidc-lab`
+4. Save
 
-Verification ensures:
-
-• Token authenticity  
-• Token integrity  
-• Trusted issuer  
+Make sure you are working inside the `oidc-lab` realm, not `master`.
 
 ---
 
-# Step 4 — Simulate Authentication Flow
+# Step 3 — Create the OIDC Client
 
-Authentication sequence:
+Inside the `oidc-lab` realm:
 
+1. Click **Clients**
+2. Click **Create client**
+3. Set **Client type** to **OpenID Connect**
+4. Set **Client ID** to `oidc-lab-app`
+5. Continue
+
+Configure the client with these settings:
+
+- **Client authentication**: On
+- **Authorization**: Off
+- **Standard flow**: On
+- **Implicit flow**: Off
+- **Direct access grants**: Off
+
+Then configure:
+
+- **Valid redirect URIs**: `http://localhost:3000/callback`
+- **Valid post logout redirect URIs**: `http://localhost:3000/`
+- **Web origins**: `http://localhost:3000`
+
+Save the client.
+
+Then open the **Credentials** tab and copy the client secret.
+
+---
+
+# Step 4 — Create a Test User
+
+Inside the `oidc-lab` realm:
+
+1. Click **Users**
+2. Click **Create new user**
+3. Enter:
+   - Username: `testuser`
+   - First name: `Test`
+   - Last name: `User`
+   - Email: `testuser@example.com`
+4. Make sure **Enabled** is on
+5. Save
+
+Then:
+
+1. Open the new user
+2. Click **Credentials**
+3. Set a password
+4. Turn **Temporary** off
+5. Save
+
+This user will be used to log into the Go application.
+
+---
+
+# Step 5 — Configure the Application
+
+Create a `.env` file in the `application` directory with:
+
+```env
+OIDC_CLIENT_SECRET=your_client_secret_here
+SESSION_SECRET=your_session_secret_here
+KEYCLOAK_LOGOUT_REDIRECT=http://localhost:3000/
 ```
-Client → Identity Provider
-Identity Provider → User login
-Identity Provider → Issues ID Token
-Client → Validates ID Token
-Access granted
+
+Replace the values with your actual client secret and session secret.
+
+---
+
+# Step 6 — Run the Application
+
+From the `application` directory:
+
+```bash
+go mod tidy
+go run main.go
+```
+
+The app should start at:
+
+```text
+http://localhost:3000
 ```
 
 ---
 
-# Step 5 — Example Token Validation Concept
+# Step 7 — Test the Login Flow
 
-Verification checks:
+Open:
 
-Issuer matches trusted IdP  
-Audience matches application  
-Token not expired  
-Signature valid  
+```text
+http://localhost:3000/login
+```
+
+Then:
+
+1. Log in with `testuser`
+2. Approve the login flow
+3. Return to the application
+4. Confirm the profile page loads
+
+At this point, the application should:
+- exchange the authorization code for tokens
+- verify the ID token
+- call the UserInfo endpoint
+- store authenticated session data
 
 ---
 
-# Security Benefits
+# Step 8 — View Claims
 
-OIDC provides:
+After login, open the profile and claims pages.
 
-• Secure authentication without passwords  
-• Federated identity support  
-• Single Sign-On (SSO)  
-• Cryptographically verifiable identity  
+The project shows:
+
+- ID token claims
+- UserInfo claims
+
+This helps demonstrate how identity attributes are returned and consumed by an application.
+
+Examples include:
+
+- name
+- username
+- email
+
+---
+
+# Step 9 — Test Logout
+
+After logging in, click:
+
+```text
+Logout
+```
+
+A successful logout should:
+
+1. clear the application session
+2. call the Keycloak logout endpoint
+3. redirect back to:
+
+```text
+http://localhost:3000/
+```
+
+Then test logging in again to confirm the logout worked.
+
+---
+
+# Key Security Concepts Demonstrated
+
+This lab demonstrates:
+
+- delegated authentication
+- centralized identity management
+- Authorization Code Flow
+- PKCE protection for the code exchange
+- verification of identity claims
+- separation of authentication from application logic
+- federated logout behavior
+
+---
+
+# Example OIDC Flow Summary
+
+```text
+1. User opens /login
+2. Application redirects to Keycloak
+3. User authenticates
+4. Keycloak redirects back with authorization code
+5. Application exchanges code for tokens
+6. Application verifies ID token
+7. Application retrieves UserInfo
+8. Application creates authenticated session
+9. User accesses protected pages
+10. User logs out through Keycloak
+```
 
 ---
 
 # Result
 
-You have demonstrated:
+By completing this tutorial, you demonstrate practical understanding of:
 
-• OpenID Connect authentication flow  
-• Identity token structure and validation  
-• Modern identity federation concepts  
+- OpenID Connect
+- OAuth 2.0 Authorization Code Flow
+- PKCE
+- token and claim handling
+- Keycloak client configuration
+- session-based authenticated web applications
 
-These patterns are widely used in enterprise IAM systems.
+These are directly relevant to enterprise IAM, SSO, and identity engineering work.
 
 ---
 
 # Next Steps
 
-Possible enhancements:
+Possible future enhancements:
 
-• Integrate with real Identity Provider (Auth0, Azure AD)  
-• Implement token validation in application code  
-• Add role-based authorization  
+- route protection middleware
+- role-based access control
+- group claim mapping
+- refresh token support
+- improved UI styling
+- additional identity provider integrations
 
 ---
 
